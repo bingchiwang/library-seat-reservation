@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圖書館座位預約系統</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .seat-map { display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px; margin-bottom: 30px; }
+        .seat-box { height: 80px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: white; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .seat-box:hover { transform: scale(1.05); box-shadow: 0 6px 8px rgba(0,0,0,0.15); }
+        .seat-available { background-color: #28a745; }
+        .seat-occupied { background-color: #dc3545; }
+        .seat-box small { font-size: 0.8em; font-weight: normal; }
+        
+        #authSection, #userSection, #bookingFormSection { display: none; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+        <div class="container">
+            <a class="navbar-brand" href="#">圖書館預約</a>
+            <div class="d-flex" id="navbarContent">
+                <div id="authSection">
+                    <button class="btn btn-outline-primary me-2" data-bs-toggle="modal" data-bs-target="#loginModal">登入</button>
+                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#registerModal">註冊</button>
+                </div>
+                <div id="userSection" class="align-items-center">
+                    <span class="me-3" id="welcomeMessage"></span>
+                    <button class="btn btn-outline-danger" onclick="logout()">登出</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <h1 class="text-center mb-4">圖書館座位預約系統</h1>
+
+        <h3 class="mb-3">目前座位狀態</h3>
+        <div id="seatMap" class="seat-map"></div>
+        
+        <div class="row mb-4" id="bookingFormSection">
+            <div class="col-md-6 offset-md-3">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">新增預約</h5>
+                        <form id="bookingForm">
+                            <div class="mb-3">
+                                <label for="seatSelect" class="form-label">選擇座位</label>
+                                <select class="form-select" id="seatSelect" required></select>
+                            </div>
+                            <div class="mb-3">
+                                <label for="startTime" class="form-label">開始時間</label>
+                                <input type="datetime-local" class="form-control" id="startTime" required>
+                            </div>
+                            <div class="mb-3">
+                                <label for="endTime" class="form-label">結束時間</label>
+                                <input type="datetime-local" class="form-control" id="endTime" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">確認預約</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row mb-4" id="loginPromptSection">
+            <div class="col-md-6 offset-md-3 text-center text-muted">
+                <p>請先 <a href="#" data-bs-toggle="modal" data-bs-target="#loginModal">登入</a> 以進行座位預約</p>
+            </div>
+        </div>
+
+        <h3 class="mt-5">所有預約紀錄</h3>
+        <table class="table table-striped mt-3">
+            <thead>
+                <tr>
+                    <th>座位</th>
+                    <th>預約者</th>
+                    <th>開始時間</th>
+                    <th>結束時間</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="bookingsTableBody"></tbody>
+        </table>
+    </div>
+
+    <!-- Login Modal -->
+    <div class="modal fade" id="loginModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">登入</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="loginForm">
+                        <div class="mb-3"><label>帳號</label><input type="text" id="loginUsername" class="form-control" required></div>
+                        <div class="mb-3"><label>密碼</label><input type="password" id="loginPassword" class="form-control" required></div>
+                        <button type="submit" class="btn btn-primary w-100">登入</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Register Modal -->
+    <div class="modal fade" id="registerModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">註冊帳號</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="registerForm">
+                        <div class="mb-3"><label>帳號</label><input type="text" id="regUsername" class="form-control" required></div>
+                        <div class="mb-3"><label>密碼</label><input type="password" id="regPassword" class="form-control" required></div>
+                        <button type="submit" class="btn btn-primary w-100">註冊</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentUser = null;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            checkLoginStatus();
+            loadSeats();
+            loadBookings();
+
+            document.getElementById('bookingForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                createBooking();
+            });
+
+            document.getElementById('loginForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                login();
+            });
+
+            document.getElementById('registerForm').addEventListener('submit', function(e) {
+                e.preventDefault();
+                register();
+            });
+            
+            // 預設將時間設為現在
+            const now = new Date();
+            now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+            document.getElementById('startTime').value = now.toISOString().slice(0,16);
+            
+            const later = new Date(now);
+            later.setHours(later.getHours() + 1);
+            document.getElementById('endTime').value = later.toISOString().slice(0,16);
+        });
+
+        function parseJwt (token) {
+            try { return JSON.parse(atob(token.split('.')[1])); }
+            catch (e) { return null; }
+        }
+
+        function checkLoginStatus() {
+            const token = localStorage.getItem('token');
+            if (token) {
+                const payload = parseJwt(token);
+                if (payload && payload.exp * 1000 > Date.now()) {
+                    currentUser = payload.sub;
+                    document.getElementById('authSection').style.display = 'none';
+                    document.getElementById('userSection').style.display = 'flex';
+                    document.getElementById('welcomeMessage').innerText = `歡迎, ${currentUser}`;
+                    document.getElementById('bookingFormSection').style.display = 'block';
+                    document.getElementById('loginPromptSection').style.display = 'none';
+                    return;
+                } else {
+                    localStorage.removeItem('token');
+                }
+            }
+            currentUser = null;
+            document.getElementById('authSection').style.display = 'block';
+            document.getElementById('userSection').style.display = 'none';
+            document.getElementById('bookingFormSection').style.display = 'none';
+            document.getElementById('loginPromptSection').style.display = 'block';
+        }
+
+        function getAuthHeaders() {
+            const token = localStorage.getItem('token');
+            return token ? { 'Authorization': `Bearer ${token}` } : {};
+        }
+
+        async function login() {
+            const formData = new URLSearchParams();
+            formData.append('username', document.getElementById('loginUsername').value);
+            formData.append('password', document.getElementById('loginPassword').value);
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    localStorage.setItem('token', data.access_token);
+                    bootstrap.Modal.getInstance(document.getElementById('loginModal')).hide();
+                    checkLoginStatus();
+                    loadBookings();
+                } else {
+                    alert('登入失敗：帳號或密碼錯誤');
+                }
+            } catch (e) { console.error(e); }
+        }
+
+        async function register() {
+            const data = {
+                username: document.getElementById('regUsername').value,
+                password: document.getElementById('regPassword').value
+            };
+            try {
+                const res = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (res.ok) {
+                    alert('註冊成功！請登入。');
+                    bootstrap.Modal.getInstance(document.getElementById('registerModal')).hide();
+                } else {
+                    const err = await res.json();
+                    alert('註冊失敗：' + err.detail);
+                }
+            } catch (e) { console.error(e); }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            checkLoginStatus();
+            loadBookings();
+        }
+
+        async function loadSeats() {
+            const response = await fetch('/api/seats');
+            const seats = await response.json();
+            
+            const select = document.getElementById('seatSelect');
+            const seatMapDiv = document.getElementById('seatMap');
+            select.innerHTML = '';
+            seatMapDiv.innerHTML = '';
+
+            const now = new Date();
+
+            seats.forEach(seat => {
+                const option = document.createElement('option');
+                option.value = seat.id;
+                option.textContent = seat.name;
+                select.appendChild(option);
+
+                let isOccupied = false;
+                seat.bookings.forEach(booking => {
+                    const start = new Date(booking.start_time);
+                    const end = new Date(booking.end_time);
+                    if (now >= start && now <= end) {
+                        isOccupied = true;
+                    }
+                });
+
+                const seatBox = document.createElement('div');
+                seatBox.className = `seat-box ${isOccupied ? 'seat-occupied' : 'seat-available'}`;
+                seatBox.innerHTML = `
+                    <div>
+                        <div>${seat.name}</div>
+                        <small>${isOccupied ? '使用中' : '空閒'}</small>
+                    </div>
+                `;
+                seatBox.onclick = () => {
+                    select.value = seat.id;
+                    if(currentUser) document.getElementById('bookingForm').scrollIntoView({ behavior: 'smooth' });
+                };
+                seatMapDiv.appendChild(seatBox);
+            });
+        }
+
+        async function loadBookings() {
+            const seatsResponse = await fetch('/api/seats');
+            const seats = await seatsResponse.json();
+            const seatMap = {};
+            seats.forEach(s => seatMap[s.id] = s.name);
+
+            const response = await fetch('/api/bookings');
+            const bookings = await response.json();
+            const tbody = document.getElementById('bookingsTableBody');
+            tbody.innerHTML = '';
+            
+            bookings.forEach(booking => {
+                const tr = document.createElement('tr');
+                let deleteBtn = '';
+                if (currentUser && currentUser === booking.user_name) {
+                    deleteBtn = `<button class="btn btn-danger btn-sm" onclick="deleteBooking(${booking.id})">取消預約</button>`;
+                }
+                tr.innerHTML = `
+                    <td>${seatMap[booking.seat_id] || booking.seat_id}</td>
+                    <td>${booking.user_name}</td>
+                    <td>${new Date(booking.start_time).toLocaleString()}</td>
+                    <td>${new Date(booking.end_time).toLocaleString()}</td>
+                    <td>${deleteBtn}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function createBooking() {
+            const data = {
+                seat_id: parseInt(document.getElementById('seatSelect').value),
+                start_time: document.getElementById('startTime').value + ':00',
+                end_time: document.getElementById('endTime').value + ':00'
+            };
+
+            if (new Date(data.start_time) >= new Date(data.end_time)) {
+                alert("結束時間必須晚於開始時間！");
+                return;
+            }
+
+            try {
+                const headers = { 'Content-Type': 'application/json', ...getAuthHeaders() };
+                const response = await fetch('/api/bookings', { method: 'POST', headers, body: JSON.stringify(data) });
+
+                if (response.ok) {
+                    alert('預約成功！');
+                    loadSeats();
+                    loadBookings();
+                } else {
+                    const error = await response.json();
+                    alert('預約失敗：' + error.detail);
+                }
+            } catch (err) {
+                alert('發生錯誤');
+                console.error(err);
+            }
+        }
+
+        async function deleteBooking(id) {
+            if (confirm('確定要取消此預約嗎？')) {
+                const headers = getAuthHeaders();
+                await fetch(`/api/bookings/${id}`, { method: 'DELETE', headers });
+                loadSeats();
+                loadBookings();
+            }
+        }
+    </script>
+</body>
+</html>
