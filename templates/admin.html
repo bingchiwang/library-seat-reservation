@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圖書館預約系統 - 後台管理</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/admin">管理員後台</a>
+            <div class="d-flex align-items-center">
+                <span class="text-white me-3" id="adminName"></span>
+                <a href="/" class="btn btn-outline-light me-2">返回前台</a>
+                <button class="btn btn-danger" onclick="logout()">登出</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4" id="adminContent" style="display:none;">
+        <h2 class="mb-4">圖書館管理中心</h2>
+        
+        <ul class="nav nav-tabs mb-4">
+            <li class="nav-item">
+                <a class="nav-link active" id="tab-bookings" href="#" onclick="switchTab('bookings')">預約管理</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" id="tab-users" href="#" onclick="switchTab('users')">使用者管理</a>
+            </li>
+        </ul>
+
+        <!-- 預約管理區塊 -->
+        <div id="section-bookings">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4>所有預約紀錄</h4>
+                <button class="btn btn-sm btn-primary" onclick="loadAdminData()">🔄 重新整理</button>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover bg-white">
+                    <thead class="table-light">
+                        <tr>
+                            <th>座位</th>
+                            <th>預約者</th>
+                            <th>開始時間</th>
+                            <th>結束時間</th>
+                            <th>管理員操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="adminBookingsTable"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 使用者管理區塊 -->
+        <div id="section-users" style="display:none;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4>系統使用者列表</h4>
+                <button class="btn btn-sm btn-primary" onclick="loadAdminData()">🔄 重新整理</button>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover bg-white">
+                    <thead class="table-light">
+                        <tr>
+                            <th>使用者帳號</th>
+                            <th>身分</th>
+                            <th>警告次數</th>
+                            <th>最後記點時間</th>
+                            <th>停權狀態 (至何時)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="adminUsersTable"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 權限不足提示 -->
+    <div class="container mt-5 text-center" id="noAccessSection" style="display:none;">
+        <h3 class="text-danger">您沒有權限訪問此頁面，或尚未登入。</h3>
+        <p>系統將在 3 秒後自動跳轉至前台首頁...</p>
+        <a href="/" class="btn btn-primary mt-3">立即返回首頁</a>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            checkAdminAccess();
+        });
+
+        function getAuthHeaders() {
+            const token = localStorage.getItem('token');
+            return token ? { 'Authorization': `Bearer ${token}` } : {};
+        }
+
+        async function checkAdminAccess() {
+            try {
+                const res = await fetch('/api/me', { headers: getAuthHeaders() });
+                if (res.ok) {
+                    const user = await res.json();
+                    if (user.is_admin) {
+                        document.getElementById('adminName').innerText = `管理員: ${user.username}`;
+                        document.getElementById('adminContent').style.display = 'block';
+                        loadAdminData();
+                    } else {
+                        rejectAccess();
+                    }
+                } else {
+                    rejectAccess();
+                }
+            } catch (e) {
+                rejectAccess();
+            }
+        }
+
+        function rejectAccess() {
+            document.getElementById('noAccessSection').style.display = 'block';
+            setTimeout(() => { window.location.href = '/'; }, 3000);
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            window.location.href = '/';
+        }
+
+        function switchTab(tab) {
+            document.getElementById('tab-bookings').classList.remove('active');
+            document.getElementById('tab-users').classList.remove('active');
+            document.getElementById('section-bookings').style.display = 'none';
+            document.getElementById('section-users').style.display = 'none';
+            
+            document.getElementById(`tab-${tab}`).classList.add('active');
+            document.getElementById(`section-${tab}`).style.display = 'block';
+        }
+
+        async function loadAdminData() {
+            loadBookings();
+            loadUsers();
+        }
+
+        async function loadBookings() {
+            const seatsResponse = await fetch('/api/seats');
+            const seats = await seatsResponse.json();
+            const seatMap = {};
+            seats.forEach(s => seatMap[s.id] = s.name);
+
+            const response = await fetch('/api/bookings');
+            const bookings = await response.json();
+            const tbody = document.getElementById('adminBookingsTable');
+            tbody.innerHTML = '';
+            
+            bookings.forEach(booking => {
+                const tr = document.createElement('tr');
+                const start = new Date(booking.start_time);
+                
+                let actionHtml = `
+                    <button class="btn btn-warning btn-sm me-1" onclick="warnUser('${booking.user_name}')">違規記點</button>
+                    <button class="btn btn-danger btn-sm" onclick="adminDeleteBooking(${booking.id})">強制取消</button>
+                `;
+                
+                tr.innerHTML = `
+                    <td>${seatMap[booking.seat_id] || booking.seat_id}</td>
+                    <td><strong>${booking.user_name}</strong></td>
+                    <td>${start.toLocaleString()}</td>
+                    <td>${new Date(booking.end_time).toLocaleString()}</td>
+                    <td>${actionHtml}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function loadUsers() {
+            const response = await fetch('/api/users', { headers: getAuthHeaders() });
+            if (!response.ok) return;
+            const users = await response.json();
+            
+            const tbody = document.getElementById('adminUsersTable');
+            tbody.innerHTML = '';
+            
+            users.forEach(u => {
+                const tr = document.createElement('tr');
+                const role = u.is_admin ? '<span class="badge bg-primary">管理員</span>' : '一般使用者';
+                
+                let banStatus = '<span class="text-success">正常</span>';
+                if (u.banned_until && new Date(u.banned_until) > new Date()) {
+                    banStatus = `<span class="text-danger fw-bold">停權中 (至 ${new Date(u.banned_until).toLocaleString()})</span>`;
+                }
+
+                let warningTimeStr = u.last_warning_time ? new Date(u.last_warning_time).toLocaleString() : '無紀錄';
+
+                tr.innerHTML = `
+                    <td>${u.username}</td>
+                    <td>${role}</td>
+                    <td><span class="badge ${u.warning_count >= 3 ? 'bg-danger' : (u.warning_count > 0 ? 'bg-warning text-dark' : 'bg-secondary')}">${u.warning_count}</span></td>
+                    <td>${warningTimeStr}</td>
+                    <td>${banStatus}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function warnUser(username) {
+            if (confirm(`確定要對使用者【${username}】記一次警告嗎？這可能會導致他被停權並取消所有預約。`)) {
+                const res = await fetch(`/api/users/${username}/warn`, { method: 'POST', headers: getAuthHeaders() });
+                if (res.ok) {
+                    const data = await res.json();
+                    alert(data.message);
+                    loadAdminData();
+                } else {
+                    const error = await res.json();
+                    alert('記點失敗：' + error.detail);
+                }
+            }
+        }
+
+        async function adminDeleteBooking(id) {
+            if (confirm('確定要強制取消此預約嗎？')) {
+                const res = await fetch(`/api/bookings/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
+                if (res.ok) {
+                    loadAdminData();
+                } else {
+                    const error = await res.json();
+                    alert('取消失敗：' + error.detail);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

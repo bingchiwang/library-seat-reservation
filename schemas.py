@@ -16,6 +16,10 @@ class UserCreate(BaseModel):
 class User(BaseModel):
     id: int
     username: str
+    is_admin: bool
+    warning_count: int
+    last_warning_time: Optional[datetime] = None
+    banned_until: Optional[datetime] = None
     
     class Config:
         from_attributes = True

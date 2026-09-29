@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -8,6 +8,10 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     hashed_password = Column(String)
+    is_admin = Column(Boolean, default=False)
+    warning_count = Column(Integer, default=0)
+    last_warning_time = Column(DateTime, nullable=True)
+    banned_until = Column(DateTime, nullable=True)
 
 class Seat(Base):
     __tablename__ = "seats"
