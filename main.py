@@ -12,6 +12,7 @@ import hashlib
 import models
 import schemas
 from database import SessionLocal, engine
+from repository import UserRepository, SeatRepository, BookingRepository
 
 SECRET_KEY = "mysecretkey"
 ALGORITHM = "HS256"
@@ -62,7 +63,7 @@ def check_and_reduce_warnings(user: models.User, db: Session):
             if user.banned_until and user.banned_until < now:
                 user.banned_until = None
                 
-            db.commit()
+            UserRepository.update(db, user)
     return user
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
@@ -78,7 +79,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
             raise credentials_exception
     except jwt.PyJWTError:
         raise credentials_exception
-    user = db.query(models.User).filter(models.User.username == username).first()
+        
+    user = UserRepository.get_by_username(db, username)
     if user is None:
         raise credentials_exception
     
@@ -88,11 +90,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 @app.on_event("startup")
 def startup_event():
     db = SessionLocal()
-    seat_count = db.query(models.Seat).count()
-    if seat_count == 0:
-        for i in range(1, 11):
-            db.add(models.Seat(name=f"座位 {i}"))
-        db.commit()
+    if SeatRepository.count(db) == 0:
+        SeatRepository.create_defaults(db)
     db.close()
 
 @app.get("/", response_class=HTMLResponse)
@@ -107,27 +106,25 @@ async def read_admin(request: Request):
 def get_all_users(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="權限不足")
-    users = db.query(models.User).all()
+    users = UserRepository.get_all(db)
     for user in users:
         check_and_reduce_warnings(user, db)
     return users
 
 @app.post("/api/register", response_model=schemas.User)
 def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    db_user = db.query(models.User).filter(models.User.username == user.username).first()
+    db_user = UserRepository.get_by_username(db, user.username)
     if db_user:
         raise HTTPException(status_code=400, detail="此帳號已註冊")
     hashed_password = get_password_hash(user.password)
     is_admin = True if user.username.lower() == "admin" else False
-    db_user = models.User(username=user.username, hashed_password=hashed_password, is_admin=is_admin)
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+    
+    new_user = UserRepository.create(db, user.username, hashed_password, is_admin)
+    return new_user
 
 @app.post("/api/login", response_model=schemas.Token)
 def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.username == form_data.username).first()
+    user = UserRepository.get_by_username(db, form_data.username)
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="帳號或密碼錯誤")
     
@@ -146,8 +143,8 @@ def get_me(current_user: models.User = Depends(get_current_user)):
 
 @app.get("/api/seats", response_model=list[schemas.Seat])
 def read_seats(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    seats = db.query(models.Seat).offset(skip).limit(limit).all()
-    return seats
+    # Note: skip and limit ignored in SeatRepository for simplicity
+    return SeatRepository.get_all(db)
 
 @app.post("/api/bookings", response_model=schemas.Booking)
 def create_booking(booking: schemas.BookingCreate, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -173,29 +170,21 @@ def create_booking(booking: schemas.BookingCreate, current_user: models.User = D
     if duration <= 0 or duration % 3600 != 0:
         raise HTTPException(status_code=400, detail="每次預約時間單位必須為一小時")
 
-    overlapping_booking = db.query(models.Booking).filter(
-        models.Booking.seat_id == booking.seat_id,
-        models.Booking.start_time < booking.end_time,
-        models.Booking.end_time > booking.start_time
-    ).first()
+    overlapping_booking = BookingRepository.get_overlapping(db, booking.seat_id, booking.start_time, booking.end_time)
     
     if overlapping_booking:
         raise HTTPException(status_code=400, detail="此時段該座位已被預約")
         
-    db_booking = models.Booking(**booking.model_dump(), user_name=current_user.username)
-    db.add(db_booking)
-    db.commit()
-    db.refresh(db_booking)
+    db_booking = BookingRepository.create(db, booking, current_user.username)
     return db_booking
 
 @app.get("/api/bookings", response_model=list[schemas.Booking])
 def read_bookings(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    bookings = db.query(models.Booking).offset(skip).limit(limit).all()
-    return bookings
+    return BookingRepository.get_all(db, skip, limit)
     
 @app.delete("/api/bookings/{booking_id}")
 def delete_booking(booking_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    booking = db.query(models.Booking).filter(models.Booking.id == booking_id).first()
+    booking = BookingRepository.get_by_id(db, booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail="找不到此預約")
         
@@ -207,8 +196,7 @@ def delete_booking(booking_id: int, current_user: models.User = Depends(get_curr
         if (booking.start_time - now).total_seconds() < 3600:
             raise HTTPException(status_code=400, detail="距離預約時間小於1小時，無法取消")
             
-    db.delete(booking)
-    db.commit()
+    BookingRepository.delete(db, booking)
     return {"message": "預約已取消"}
 
 @app.post("/api/users/{username}/warn")
@@ -216,7 +204,7 @@ def warn_user(username: str, current_user: models.User = Depends(get_current_use
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="只有管理員可以進行記點")
         
-    user = db.query(models.User).filter(models.User.username == username).first()
+    user = UserRepository.get_by_username(db, username)
     if not user:
         raise HTTPException(status_code=404, detail="找不到使用者")
         
@@ -226,11 +214,7 @@ def warn_user(username: str, current_user: models.User = Depends(get_current_use
     
     if user.warning_count >= 3:
         user.banned_until = now + timedelta(days=3)
-        # Delete future bookings
-        db.query(models.Booking).filter(
-            models.Booking.user_name == user.username,
-            models.Booking.start_time > now
-        ).delete()
+        BookingRepository.delete_future_bookings_for_user(db, user.username, now)
         
-    db.commit()
+    UserRepository.update(db, user)
     return {"message": f"已給予 {username} 警告，目前累積 {user.warning_count} 次"}
